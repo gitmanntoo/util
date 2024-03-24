@@ -3,6 +3,7 @@
 import argparse
 import base64
 from lib import crypt
+import sys
 
 
 def read_args() -> argparse.Namespace:
@@ -32,16 +33,22 @@ def main():
 
     phrases = crypt.get_multiline_password()
 
-    if args.input is None:
+    if args.input is not None:
+        with open(args.input, "rb") as fh:
+            msg_bytes = fh.read()
+    else:
         if args.decrypt:
             msg = input("Message (base64): ")
             msg_bytes = base64.b64decode(msg.encode())
         else:
-            msg = input("Message: ")
+            print("Message:")
+            lines = []
+            for line in sys.stdin:
+                if line == "":
+                    break
+                lines.append(line)
+            msg = "".join(lines)
             msg_bytes = msg.encode()
-    else:
-        with open(args.input, "rb") as fh:
-            msg_bytes = fh.read()
 
     if args.decrypt:
         out = crypt.decrypt(phrases, msg_bytes)
