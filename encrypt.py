@@ -38,7 +38,13 @@ def main():
             msg_bytes = fh.read()
     else:
         if args.decrypt:
-            msg = input("Message (base64): ")
+            print("Message (base64): ")
+            lines = []
+            for line in sys.stdin:
+                if line == "":
+                    break
+                lines.append(line)
+            msg = "".join(lines)
             msg_bytes = base64.b64decode(msg.encode())
         else:
             print("Message:")
