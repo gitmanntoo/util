@@ -9,6 +9,12 @@ def read_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Encrypt a message using a key derived from two phrases.",
     )
+    parser.add_argument("-d", "--decrypt",
+        dest="decrypt",
+        action="store_true",
+        required=False,
+        help="Optionally decrypt instead of encrypt."
+    )
     parser.add_argument("-f", "--file",
         dest="input",
         help="Optional file to encrypt. File input is read as bytes."
@@ -27,19 +33,29 @@ def main():
     phrases = crypt.get_multiline_password()
 
     if args.input is None:
-        msg = input("Message: ")
-        msg_bytes = msg.encode()
+        if args.decrypt:
+            msg = input("Message (base64): ")
+            msg_bytes = base64.b64decode(msg.encode())
+        else:
+            msg = input("Message: ")
+            msg_bytes = msg.encode()
     else:
         with open(args.input, "rb") as fh:
             msg_bytes = fh.read()
 
-    e = crypt.encrypt(phrases, msg_bytes)
+    if args.decrypt:
+        out = crypt.decrypt(phrases, msg_bytes)
+    else:
+        out = crypt.encrypt(phrases, msg_bytes)
 
     if args.output is not None:
         with open(args.output, "wb") as fh:
-            fh.write(e)
+            fh.write(out)
     else:
-        print(base64.b64encode(e).decode())
+        if args.decrypt:
+            print(out.decode())
+        else:
+            print(base64.b64encode(out).decode())
 
 
 if __name__ == "__main__":
