@@ -81,6 +81,14 @@ URLTuple = namedtuple("URLTuple", [
     "fragment",
 ])
 
+IMAGE_TYPES = [
+    "gif",
+    "ico",
+    "jpeg",
+    "png",
+    "svg",
+]
+
 @app.route('/markdown')
 def make_markdown():
     """Make a markdown link.
@@ -136,7 +144,7 @@ def make_markdown():
             favicon_url = urlparse(urljoin(parsed_url.geturl(), favicon_url.geturl()))
                                    
         tokens = favicon_url.path.rsplit(".", 1)
-        if len(tokens) == 2 and tokens[1] in ("gif","ico","jpeg","png","svg",):
+        if len(tokens) == 2 and tokens[1] in IMAGE_TYPES:
             favicon_url = urlparse(urljoin(favicon_url.geturl(), favicon_url.path))
 
         final_favicon = favicon_url.geturl()
