@@ -2,7 +2,7 @@
 
 import argparse
 import base64
-from lib import crypt
+from library import crypt
 import sys
 
 
