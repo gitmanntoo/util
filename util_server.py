@@ -166,4 +166,4 @@ def make_markdown():
 
 
 if __name__ == "__main__":
-    print("Run using the flask command:\n\nflask --app util_server run  --host=0.0.0.0 --port=8532 --debug\n\n")
+    app.run(debug=True,host="0.0.0.0", port=8532)
