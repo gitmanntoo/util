@@ -1,5 +1,5 @@
 // This script copies details about the page into the clipboard.
-var b = new URL("http://localhost:8532/mirror");
+var b = new URL("http://localhost:8532/clip");
 
 var p = new URLSearchParams();
 p.append("url",document.URL);

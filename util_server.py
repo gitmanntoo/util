@@ -10,6 +10,7 @@ import fitz
 from flask import Flask, abort, make_response, render_template, request, send_file, send_from_directory
 import jsmin
 from playwright.sync_api import sync_playwright
+import pyperclip
 import yaml
 
 from bs4 import BeautifulSoup
@@ -25,26 +26,7 @@ def read_root():
     return "Hello, World!"
 
 
-@app.route('/javascript/<filename>.js')
-def serve_js(filename):
-    """
-    Serves javascript files from the static directory.
-    
-    If the url contains "minify=true" or "bookmarklet=true", the file will be
-    minified and/or converted into a bookmarklet.
-    """
-    # Ensure the filename does not contain path traversals
-    if '..' in filename or filename.startswith('/'):
-        abort(404)  # Not found
-
-    # Read options
-    query = request.args.to_dict(flat=True)
-    minify = query.get("minify", "false") == "true"
-    bookmarklet = query.get("bookmarklet", "false") == "true" 
-    
-    # Define the path to the static directory
-    # static_dir = os.path.join(app.root_path, STATIC_DIR)
-
+def get_javascript_file(filename, mode):
     # Read the contents of the file
     try:
         with open(STATIC_DIR / "javascript" / f"{filename}.js", "r") as f:
@@ -53,15 +35,63 @@ def serve_js(filename):
         abort(404)  # Not found if the file does not exist
 
     # Minify the contents if set.
-    if minify or bookmarklet:
+    if mode in ("minify","bookmarklet"):
         contents = jsmin.jsmin(contents).strip()
 
     # Add a bookmarklet if set.
-    if bookmarklet:
+    if mode == "bookmarklet":
         contents = f"javascript:(function(){{{contents}}})();"
 
     # Return the contents
-    response = make_response(contents)
+    return contents
+
+
+@app.route('/bb')
+def get_bookmarklets():
+    """
+    Return a list of bookmarklet names and javascript.
+
+    Returns
+    -------
+    str
+        A string containing the bookmarklet names and javascript.
+        Each bookmarklet is on its own line, with the name in all caps
+        followed by the javascript, followed by an empty line.
+        The mimetype of the response is text/plain.
+    """
+
+    print("debugxxxxx 01")
+    out = []
+    for name in ("clip","html","jira","md","mirror","pdf","text"):
+        out.append(name.upper())
+        out.append(get_javascript_file(name, "bookmarklet"))
+        out.append("")
+
+    resp = make_response("\n".join(out))
+    resp.headers['Content-Type'] = 'text/plain'
+    return resp
+
+
+
+@app.route('/javascript/<filename>.js')
+def serve_js(filename):
+    """
+    Serves javascript files from the static directory.
+    
+    Mode controls the output format:
+    - "minify": minified javascript
+    - "bookmarklet": a bookmarklet from minified javascript
+    - default: unmodified javascript
+    """
+    # Ensure the filename does not contain path traversals
+    if '..' in filename or filename.startswith('/'):
+        abort(404)  # Not found
+
+    # Read options
+    mode = request.args.get("mode","")
+    
+    # Return the contents
+    response = make_response(get_javascript_file(filename, mode))
     response.headers['Content-Type'] = 'text/plain'
     
     return response
@@ -82,6 +112,7 @@ def request_to_dict(request):
     """Convert a request to a dictionary in a standard way."""
     out = {
         "url": request.args.get("url",request.url),
+        "title": request.args.get("title",""),
         "headers": {k:v for k,v in request.headers.items()},
         "query_string": request.query_string,
         "query": {k:v for k,v in request.args.to_dict(flat=True).items()},
@@ -180,7 +211,36 @@ def largest_favicon_link(favicon_links):
     return favicon_link
 
 
-@app.route('/mirror', methods=["POST"])
+@app.route('/clip')
+def get_clipboard():
+    """Return the contents of the clipboard."""
+
+    # Read clipboard contents.
+    clip = pyperclip.paste()
+
+    # If contents are not valid JSON, return plain text.
+    try:
+        clip_json = json.loads(clip)
+    except json.JSONDecodeError:
+        resp = make_response( clip.strip())
+        resp.headers['Content-Type'] = 'text/plain'
+        return resp
+    
+    # Compare the clipboard URL to the URL in the request.
+    if clip_json.get("url") != request.args.get("url"):
+        resp_msg = "ERROR: URL in clipboard does not match request URL.\n{}".format(json.dumps(clip_json, indent=2))
+        resp = make_response(resp_msg)
+        resp.headers['Content-Type'] = 'text/plain'
+        return resp
+    
+    # JSON is valid and URL matches. Parse and return HTML.
+    soup = BeautifulSoup(clip_json["html"], 'html.parser')
+    resp = make_response(soup.prettify())
+    resp.headers['Content-Type'] = 'text/plain'
+    return resp
+
+
+@app.route('/proxy/mirror', methods=["POST"])
 def mirror_post():
     """Save request details."""
 
@@ -201,82 +261,86 @@ def mirror_post():
 def mirror_get():
     """Mirror request details back to response as plain text."""
 
-    global mirror_url
-    global mirror_request
+    # Read request parameters.
+    url = request.args.get("url")
 
-    # Use the stored request if URL matches.
-    if mirror_url is not None and mirror_url == request.args.get("url"):
-        current_request = mirror_request
-    else:
-        current_request = request_to_dict(request)
+    # Read clipboard contents.
+    clip = pyperclip.paste()
 
-    # Reset the stored request to free up memory.
-    mirror_url = None
-    mirror_request = None
-
-    # Parse the HTML
-    data_json = json.loads(current_request['data'])
-    soup = BeautifulSoup(data_json.get('html',''), 'html.parser')
+    # If contents are not valid JSON, return error.
+    try:
+        clip_json = json.loads(clip)
+        if url != clip_json["url"]:
+            raise Exception("URL in clipboard does not match request URL.")
+        soup = BeautifulSoup(clip_json["html"], 'html.parser')
+    except Exception as e:
+        return str(e), 400
+    
     page_title = soup.title.text
 
     # Build output lines.
     out = [
-        f"URL: {current_request['url']}",
+        f"URL: {url}",
         f"TITLE: {page_title}",
         "",
     ]
 
-    rel_links = soup.find_all("link")
-    all_links = []
-    for link in rel_links:
-        new_link = {
-            "rel": link.attrs.get('rel'),
-            "href": link.attrs.get('href'),
-            "sizes": link.attrs.get('sizes'),
-        }
-        all_links.append(new_link)
+    # Get favicon
+    if soup is not None:
+        rel_links = soup.find_all("link")
+        all_links = []
+        for link in rel_links:
+            new_link = {
+                "rel": link.attrs.get('rel'),
+                "href": link.attrs.get('href'),
+                "sizes": link.attrs.get('sizes'),
+            }
+            all_links.append(new_link)
 
-    favicon_link = largest_favicon_link(all_links)
+        favicon_link = largest_favicon_link(all_links)
 
-    if favicon_link:
-        # Handle relative URLs
-        if favicon_link.startswith('/'):
-            favicon_link = urljoin(current_request['url'], favicon_link)
+        if favicon_link:
+            # Handle relative URLs
+            if favicon_link.startswith('/'):
+                favicon_link = urljoin(url, favicon_link)
 
-        out.append(f"FAVICON: {favicon_link}")
-    else:
-        out.append(f"FAVICON: NONE")
-    out.append("")
+            out.append(f"FAVICON: {favicon_link}")
+        else:
+            out.append(f"FAVICON: NONE")
+        out.append("")
 
-    # for rel_type 
-    #     favicon_link = soup.find("link", rel=rel_type)
-    #     if favicon_link and 'href' in favicon_link.attrs:
-    #         out.append(f"FAVICON: {favicon_link}")
+        # for rel_type 
+        #     favicon_link = soup.find("link", rel=rel_type)
+        #     if favicon_link and 'href' in favicon_link.attrs:
+        #         out.append(f"FAVICON: {favicon_link}")
 
-    # # If a favicon link is found, print its href attribute
-    # favicon_href = "NOT FOUND"
-    # if favicon_link and 'href' in favicon_link.attrs:
-    #     favicon_href = favicon_link['href']
+        # # If a favicon link is found, print its href attribute
+        # favicon_href = "NOT FOUND"
+        # if favicon_link and 'href' in favicon_link.attrs:
+        #     favicon_href = favicon_link['href']
         
-
     out.append("HEADERS")
-    for k,v in current_request['headers'].items():
+    for k,v in request.headers.items():
         out.append(f"{k}: {v}")
     out.append("")
 
-    out.append(f"QUERY: {current_request['query_string']}")
-    for k,v in current_request['query'].items():
+    out.append(f"QUERY: {request.query_string}")
+    for k,v in request.args.to_dict(flat=True).items():
         out.append(f"{k}: {v}")
     out.append("")
 
-    out.append("TEXT:")
-    text_tuples = iterate_elements(soup)
-    out.extend(["".join(x) for x in text_tuples])
-    out.append("")
+    if soup is not None:
+        out.append("TEXT:")
+        text_tuples = iterate_elements(soup)
+        out.extend(["".join(x) for x in text_tuples])
 
-    out.append("HTML:")
-    out.append(soup.prettify())
-    out.append("")
+        out.append("")
+
+        out.append("HTML:")
+        out.append(soup.prettify())
+        out.append("")
+    else:
+        out.append("NO HTML")
 
     resp = make_response("\n".join(out))
     resp.headers["Content-Type"] = "text/plain"
@@ -430,15 +494,32 @@ def get_pdf_images(filename):
 @app.route('/pdf')
 def make_pdf():
     # Read query parameters.
+    mode = request.args.get("mode","pdf")
     url = request.args.get("url","")
     if url == "":
         return "Error: No URL provided.", 400
     
+    # Read clipboard contents.
+    clip = pyperclip.paste()
+
+    # If contents are not valid JSON, return error.
+    try:
+        clip_json = json.loads(clip)
+        if url != clip_json["url"]:
+            raise Exception("URL in clipboard does not match request URL.")
+        soup = BeautifulSoup(clip_json["html"], 'html.parser')
+    except Exception as e:
+        return str(e), 400
+
     # Create the images directory if it doesn't exist.
     os.makedirs(PDF_IMAGES_DIR, exist_ok=True)
 
-    # Optionally return HTML. Default is to return a PDF file.
-    mode = request.args.get("mode","pdf")
+    # Write HTML to temporary file.
+    html_file = PDF_TMP_DIR / "output.html"
+    with open(html_file, "w") as f:
+        f.write(soup.prettify())
+
+    full_html_path = html_file.resolve()
 
     output_path = PDF_FILE
 
@@ -447,7 +528,7 @@ def make_pdf():
         page = browser.new_page()
         
         # Load the HTML file
-        page.goto(url)
+        page.goto(f"file://{full_html_path}")
         
         # Wait for the page to load
         page.wait_for_load_state("load")
@@ -470,7 +551,7 @@ def make_pdf():
         
         browser.close()
 
-    if mode == "html":
+    if mode in ("html", "text", ):
         # Build a web page with text and images extracted from the PDF.
         # Open the PDF file
         pdf_document = fitz.open(output_path)
@@ -480,7 +561,7 @@ def make_pdf():
 
         for page_num in range(pdf_document.page_count):
             # Add page heading
-            html_parts.append(f"<h1>Page {page_num + 1}</h1>")
+            # html_parts.append(f"<h1>Page {page_num + 1}</h1>")
 
             page = pdf_document.load_page(page_num)
             
@@ -489,20 +570,21 @@ def make_pdf():
             html_parts.append(f"<pre>{text}</pre>")
 
             # Extract images from the page
-            image_list = page.get_images(full=True)
-            for img in image_list:
-                xref = img[0]
+            if mode in ("html",):
+                image_list = page.get_images(full=True)
+                for img in image_list:
+                    xref = img[0]
 
-                pix = fitz.Pixmap(pdf_document, xref)
-                pix_filename = f"image_{xref}.png"
-                with open(PDF_IMAGES_DIR / pix_filename, "wb") as fp:
-                    fp.write(pix.tobytes())
+                    pix = fitz.Pixmap(pdf_document, xref)
+                    pix_filename = f"image_{xref}.png"
+                    with open(PDF_IMAGES_DIR / pix_filename, "wb") as fp:
+                        fp.write(pix.tobytes())
 
-                html_parts.append(f'<img src="pdf/images/{pix_filename}">')
+                    html_parts.append(f'<img src="pdf/images/{pix_filename}"><br>')
 
-                # base_image = pdf_document.extract_image(xref)
-                # image = base_image["image"]
-                # content_in_order.append(image)
+                    # base_image = pdf_document.extract_image(xref)
+                    # image = base_image["image"]
+                    # content_in_order.append(image)
 
         # Close the PDF file
         pdf_document.close()

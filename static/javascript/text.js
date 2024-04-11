@@ -1,7 +1,8 @@
 // This script copies details about the page into the clipboard.
-var b = new URL("http://localhost:8532/mirror");
+var b = new URL("http://localhost:8532/pdf");
 
 var p = new URLSearchParams();
+p.append("mode","text");
 p.append("url",document.URL);
 p.append("title",document.title);
 
