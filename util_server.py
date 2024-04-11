@@ -6,10 +6,13 @@ from collections import namedtuple
 import re
 from urllib.parse import urlparse, urljoin, urlsplit, urlunsplit, urlunparse
 
-from bs4 import BeautifulSoup
-from flask import Flask, request, make_response, send_from_directory, abort, render_template
+import fitz
+from flask import Flask, abort, make_response, render_template, request, send_file, send_from_directory
 import jsmin
+from playwright.sync_api import sync_playwright
 import yaml
+
+from bs4 import BeautifulSoup
 
 
 app = Flask(__name__)
@@ -21,31 +24,15 @@ SIZE_REGEX = re.compile(r'\b(\d+)x(\d+)\b')
 def read_root():
     return "Hello, World!"
 
-"""
-Use this bookmarklet to retrieve a function from the util_server and execute it.
-
-javascript:(function() {
-    var script = document.createElement('script');
-    script.src = 'http://localhost:8532/bookmarklet.js';
-    document.head.appendChild(script);
-})();
-"""
-@app.route('/javascript/bookmarklet.js')
-def bookmarklet():
-    # Get optional path from request.
-    query = request.args.to_dict(flat=True)
-    script = query.get("script", "hello")
-
-    js_code = render_template("bookmarklet.js", script=script)
-
-    response = make_response(js_code)
-    response.headers['Content-Type'] = 'text/plain'
-
-    return response
-
 
 @app.route('/javascript/<filename>.js')
 def serve_js(filename):
+    """
+    Serves javascript files from the static directory.
+    
+    If the url contains "minify=true" or "bookmarklet=true", the file will be
+    minified and/or converted into a bookmarklet.
+    """
     # Ensure the filename does not contain path traversals
     if '..' in filename or filename.startswith('/'):
         abort(404)  # Not found
@@ -78,6 +65,7 @@ def serve_js(filename):
     response.headers['Content-Type'] = 'text/plain'
     
     return response
+
 
 
 """
@@ -123,18 +111,18 @@ def iterate_elements(element, depth=0):
 
             # Print the element's name and its depth (indentation level)
             if parent_text:
-                text_content = TextTuple('  ' * depth, element.name, parent_text)
+                text_content = TextTuple("\n"+'..' * depth, element.name.upper() + ":", parent_text)
         
         # Iterate over each child, increasing the depth
         child_text = None
         for child in element.children:
             child_text = iterate_elements(child, depth + 1)
 
-        if child_text:
-            # Iterate over children in reverse and remove text from the parent.
-            for c in child_text[::-1]:
-                if text_content.text.endswith(c.text):
-                    text_content = TextTuple(text_content.indent, text_content.name, text_content.text[:-len(c[2])])
+        # if child_text:
+        #     # Iterate over children in reverse and remove text from the parent.
+        #     for c in child_text[::-1]:
+        #         if text_content.text.endswith(c.text):
+        #             text_content = TextTuple(text_content.indent, text_content.name, text_content.text[:-len(c[2])])
 
         if text_content:
             out.append(text_content)
@@ -314,12 +302,17 @@ URLTuple = namedtuple("URLTuple", [
 CONFIG = yaml.safe_load(open("util_server.yml"))
 ALIAS_MAP = CONFIG.get("alias_map", {})
 IMAGE_TYPES = CONFIG.get("image_types", [])
+FAVICON_WIDTH = 20
 
-@app.route('/omd')
+@app.route('/md')
 def make_obsidian_markdown():
     """Make a markdown link for an obsidian page.
 
     Parameters:
+    - mode: str -- Mode for markdown format
+        - default: "obsidian" consisting of ![favicon|20] [extended title](url)
+        - "simple": simple markdown consisting of [title](url) without any modifications
+        - "jira": JIRA format using pipe: [title|url]
     - url: str -- URL of source page
     - title: str -- Title of source page
     - favicon: str -- Repeated favicon links from source page. Consists of `~` delimited strings:
@@ -329,6 +322,7 @@ def make_obsidian_markdown():
     # Read query parameters.
     url = request.args.get("url","")
     title = request.args.get("title","")
+    mode = request.args.get("mode","obsidian")
 
     query = request.args.to_dict(flat=False)
     favicon_links = []
@@ -389,11 +383,23 @@ def make_obsidian_markdown():
 
     # Build markdown link.
     final_markdown = ""
+    if mode == "github":
+        # Replace square brackets with parentheses.
+        title = title.replace('[','(').replace(']',')')
+        final_markdown = f"[{title}]({final_url})"
+    elif mode == "jira":
+        # Replace pipe with square brackets.
+        title = title.replace('|','-')
+        final_markdown = f"[{title}|{final_url}]"
+    else:
+        # obsidian default for everything else
+        if favicon_href:
+            final_markdown += f"![favicon|{FAVICON_WIDTH}]({favicon_href}) "
 
-    if favicon_href:
-        final_markdown += f"![favicon|20]({favicon_href}) "
+        # Replace square brackets with parentheses.
+        final_title = final_title.replace('[','(').replace(']',')')
 
-    final_markdown += f"[{final_title}]({final_url})"
+        final_markdown += f"[{final_title}]({final_url})"
 
     ### DEBUGXXXXX: Print all variables
     # final_markdown = [
@@ -412,80 +418,113 @@ def make_obsidian_markdown():
     return resp
 
 
-@app.route('/markdown')
-def make_markdown():
-    """Make a markdown link.
+PDF_TMP_DIR = Path("tmp/pdf")
+PDF_FILE = PDF_TMP_DIR / "output.pdf"
+PDF_IMAGES_DIR = Path("tmp/pdf/images")
 
-    Parameters:
-    - dialect: str -- Markdown dialect. Default: obsidian
-    - url: str -- URL of source page
-    - title: str -- Title of source page
-    - favicon: str -- URL of favicon from source page
-    """
+@app.route('/pdf/images/<filename>')
+def get_pdf_images(filename):
+    return send_from_directory(PDF_IMAGES_DIR, filename)
 
+
+@app.route('/pdf')
+def make_pdf():
     # Read query parameters.
-    dialect = request.args.get("dialect","obsidian")
     url = request.args.get("url","")
-    title = request.args.get("title","")
-    favicon = request.args.get("favicon","")
+    if url == "":
+        return "Error: No URL provided.", 400
+    
+    # Create the images directory if it doesn't exist.
+    os.makedirs(PDF_IMAGES_DIR, exist_ok=True)
 
-    # Parse URL
-    parsed_url = urlparse(url)
-    final_url = urlunparse(URLTuple(
-        scheme=parsed_url.scheme,
-        netloc=parsed_url.netloc,
-        path=parsed_url.path,
-        params="",
-        query="",
-        fragment=parsed_url.fragment,
-    ))
+    # Optionally return HTML. Default is to return a PDF file.
+    mode = request.args.get("mode","pdf")
 
-    # Get suffix from title.
-    title_tokens = [x.strip() for x in title.rsplit("|", 1)]
-    if len(title_tokens) == 2:
-        title_prefix = title_tokens[0]
-        title_suffix = title_tokens[1]
+    output_path = PDF_FILE
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        
+        # Load the HTML file
+        page.goto(url)
+        
+        # Wait for the page to load
+        page.wait_for_load_state("load")
+        print(f"{page.viewport_size=}")
+
+        # Generate the PDF using the default viewport size.
+        page.pdf(path=output_path,scale=1)
+
+        # # Read the PDF and get the number of pages.
+        # pdf_doc = fitz.open(output_path)
+        # num_pages = pdf_doc.page_count
+        # print(f"{num_pages=}")
+        # pdf_doc.close()
+
+        # # Adjust the size of the viewport and regenerate the pdf.
+        # page.set_viewport_size({"width": page.viewport_size["width"], "height": num_pages * page.viewport_size["height"]})
+        # print(f"{page.viewport_size=}")
+        # # page.goto(url)
+        # page.pdf(path=output_path,scale=1, width=str(page.viewport_size["width"]), height=str(page.viewport_size["height"]))
+        
+        browser.close()
+
+    if mode == "html":
+        # Build a web page with text and images extracted from the PDF.
+        # Open the PDF file
+        pdf_document = fitz.open(output_path)
+
+        # Extract text and images from the PDF and build a web page.
+        html_parts = []
+
+        for page_num in range(pdf_document.page_count):
+            # Add page heading
+            html_parts.append(f"<h1>Page {page_num + 1}</h1>")
+
+            page = pdf_document.load_page(page_num)
+            
+            # Extract text from the page
+            text = page.get_text("text")
+            html_parts.append(f"<pre>{text}</pre>")
+
+            # Extract images from the page
+            image_list = page.get_images(full=True)
+            for img in image_list:
+                xref = img[0]
+
+                pix = fitz.Pixmap(pdf_document, xref)
+                pix_filename = f"image_{xref}.png"
+                with open(PDF_IMAGES_DIR / pix_filename, "wb") as fp:
+                    fp.write(pix.tobytes())
+
+                html_parts.append(f'<img src="pdf/images/{pix_filename}">')
+
+                # base_image = pdf_document.extract_image(xref)
+                # image = base_image["image"]
+                # content_in_order.append(image)
+
+        # Close the PDF file
+        pdf_document.close()
+
+        # # Generate HTML content for the web page
+        # for content in content_in_order:
+        #     if isinstance(content, str):
+        #         # Add text content to the HTML
+        #         html_parts.append(f"<p>{content}</p>")
+        #     else:
+        #         # Save the image to a local file
+        #         image_path = f"image_{content_in_order.index(content)}.png"
+        #         content.save(image_path)
+
+        #         # Add image link to the HTML
+        #         # html_content += f'<img src="{image_path}" width="50%" height="50%">'
+        #         html_parts.append(f'<img src="{image_path}" width="50%" height="50%">')
+
+        return "\n".join(html_parts)
     else:
-        title_prefix = title
-        title_suffix = ""
+        return send_file(output_path, mimetype='application/pdf', as_attachment=True)    
 
-    # Lookup netloc and title_suffix to get alias for title.
-    final_title = f"{parsed_url.netloc}: {title}"
-    suffix_map = ALIAS_MAP.get(parsed_url.netloc,{})
-    for suffix in suffix_map.keys():
-        if suffix == "":
-            final_title = f"{suffix_map[suffix]}: {title}"
-        elif title.endswith(suffix):
-            title = title[:-len(suffix)]
-            final_title = f"{suffix_map[suffix]}: {title}"
-
-    # If favicon path is an image, remove the search parameters.
-    final_favicon = ""
-    if favicon:
-        favicon_url = urlparse(favicon)
-        if favicon_url.netloc == "" or favicon_url.netloc == parsed_url.netloc:
-            favicon_url = urlparse(urljoin(parsed_url.geturl(), favicon_url.geturl()))
-                                   
-        tokens = favicon_url.path.rsplit(".", 1)
-        if len(tokens) == 2 and tokens[1] in IMAGE_TYPES:
-            favicon_url = urlparse(urljoin(favicon_url.geturl(), favicon_url.path))
-
-        final_favicon = favicon_url.geturl()
-
-    # Build markdown link.
-    final_markdown = ""
-    if favicon:
-        final_markdown = f"![favicon|20]({final_favicon}) "
-    final_markdown += f"[{final_title}]({final_url})"
-
-    # out = [
-    #     f"{favicon=}",
-    #     f"{favicon_url.geturl()}",
-    #     f"{favicon_url.netloc}",
-    #     f"{final_markdown=}",
-    # ]
-
-    return "<pre>{}</prd>".format(final_markdown)
 
 
 if __name__ == "__main__":

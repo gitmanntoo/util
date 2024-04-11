@@ -1,5 +1,9 @@
+// This script extracts the page url, title, and favicon links
+// and sends them to the server for processing to create a markdown link.
+
 // b is the baseURL
-var b = new URL("http://localhost:8532/omd");
+var b = new URL("http://localhost:8532/md");
+var p=new URLSearchParams();
 
 // gf is getFaviconLinks function
 const gf = k =>
@@ -8,7 +12,6 @@ const gf = k =>
     ).map(k => ({ rel: k.rel, href: k.href, sizes: k.sizes }));
 
 // Build query parameters.
-var p=new URLSearchParams();
 p.append("url",document.URL);
 p.append("title",document.title);
 
