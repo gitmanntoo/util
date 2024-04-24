@@ -62,12 +62,15 @@ def get_bookmarklets():
 
     print("debugxxxxx 01")
     out = []
-    for name in ("clip","html","jira","md","mirror","pdf","text"):
+    for name in ("md","lines","github","jira","clip","html","pdf","text"):
         out.append(name.upper())
         out.append(get_javascript_file(name, "bookmarklet"))
         out.append("")
 
-    resp = make_response("\n".join(out))
+    outStr = "\n".join(out)
+    pyperclip.copy(outStr)
+
+    resp = make_response(outStr)
     resp.headers['Content-Type'] = 'text/plain'
     return resp
 
@@ -91,7 +94,10 @@ def serve_js(filename):
     mode = request.args.get("mode","")
     
     # Return the contents
-    response = make_response(get_javascript_file(filename, mode))
+    outStr = get_javascript_file(filename, mode)
+    pyperclip.copy(outStr)
+
+    response = make_response(outStr)
     response.headers['Content-Type'] = 'text/plain'
     
     return response
@@ -342,8 +348,11 @@ def mirror_get():
     else:
         out.append("NO HTML")
 
-    resp = make_response("\n".join(out))
-    resp.headers["Content-Type"] = "text/plain"
+    outStr = "\n".join(out)
+    pyperclip.copy(outStr)
+
+    resp = make_response(outStr)
+    resp.headers['Content-Type'] = 'text/plain'
 
     return resp
 
@@ -455,6 +464,16 @@ def make_obsidian_markdown():
         # Replace pipe with square brackets.
         title = title.replace('|','-')
         final_markdown = f"[{title}|{final_url}]"
+    elif mode == "lines":
+        # Use separate lines for each element of obsidian link.
+        out = []
+        if favicon_href:
+            out.append(f"![favicon|{FAVICON_WIDTH}]({favicon_href})")
+
+        # Replace square brackets with parentheses.
+        out.extend((final_title, final_url))
+
+        final_markdown = "\n".join(out)
     else:
         # obsidian default for everything else
         if favicon_href:
@@ -476,6 +495,9 @@ def make_obsidian_markdown():
     #     f"{favicon_links=}",
     # ]
 
+
+    # Build response
+    pyperclip.copy(final_markdown)
     resp = make_response(final_markdown)
     resp.headers['Content-Type'] = 'text/plain'
 
