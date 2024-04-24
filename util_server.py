@@ -62,12 +62,15 @@ def get_bookmarklets():
 
     print("debugxxxxx 01")
     out = []
-    for name in ("clip","html","jira","md","mirror","pdf","text"):
+    for name in ("md","lines","github","jira","clip","html","pdf","text"):
         out.append(name.upper())
         out.append(get_javascript_file(name, "bookmarklet"))
         out.append("")
 
-    resp = make_response("\n".join(out))
+    outStr = "\n".join(out)
+    pyperclip.copy(outStr)
+
+    resp = make_response(outStr)
     resp.headers['Content-Type'] = 'text/plain'
     return resp
 
@@ -91,7 +94,10 @@ def serve_js(filename):
     mode = request.args.get("mode","")
     
     # Return the contents
-    response = make_response(get_javascript_file(filename, mode))
+    outStr = get_javascript_file(filename, mode)
+    pyperclip.copy(outStr)
+
+    response = make_response(outStr)
     response.headers['Content-Type'] = 'text/plain'
     
     return response
@@ -342,8 +348,11 @@ def mirror_get():
     else:
         out.append("NO HTML")
 
-    resp = make_response("\n".join(out))
-    resp.headers["Content-Type"] = "text/plain"
+    outStr = "\n".join(out)
+    pyperclip.copy(outStr)
+
+    resp = make_response(outStr)
+    resp.headers['Content-Type'] = 'text/plain'
 
     return resp
 
@@ -455,6 +464,16 @@ def make_obsidian_markdown():
         # Replace pipe with square brackets.
         title = title.replace('|','-')
         final_markdown = f"[{title}|{final_url}]"
+    elif mode == "lines":
+        # Use separate lines for each element of obsidian link.
+        out = []
+        if favicon_href:
+            out.append(f"![favicon|{FAVICON_WIDTH}]({favicon_href})")
+
+        # Replace square brackets with parentheses.
+        out.extend((final_title, final_url))
+
+        final_markdown = "\n".join(out)
     else:
         # obsidian default for everything else
         if favicon_href:
@@ -476,6 +495,9 @@ def make_obsidian_markdown():
     #     f"{favicon_links=}",
     # ]
 
+
+    # Build response
+    pyperclip.copy(final_markdown)
     resp = make_response(final_markdown)
     resp.headers['Content-Type'] = 'text/plain'
 
@@ -611,3 +633,36 @@ def make_pdf():
 
 if __name__ == "__main__":
     app.run(debug=True,host="0.0.0.0", port=8532)
+
+"""
+MD
+javascript:(function(){var b=new URL("http://localhost:8532/md");var p=new URLSearchParams();const gf=k=>Array.from(k).filter(k=>/icon|apple-touch-icon|shortcut icon/.test(k.rel)).map(k=>({rel:k.rel,href:k.href,sizes:k.sizes}));p.append("url",document.URL);p.append("title",document.title);var ks=gf(document.getElementsByTagName("link"));for(const k of ks){ks2=k.rel+"~"+k.href+"~"+k.sizes;p.append("favicon",ks2);}
+b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+LINES
+javascript:(function(){var b=new URL("http://localhost:8532/md");var p=new URLSearchParams();p.append("mode","lines");const gf=k=>Array.from(k).filter(k=>/icon|apple-touch-icon|shortcut icon/.test(k.rel)).map(k=>({rel:k.rel,href:k.href,sizes:k.sizes}));p.append("url",document.URL);p.append("title",document.title);var ks=gf(document.getElementsByTagName("link"));for(const k of ks){ks2=k.rel+"~"+k.href+"~"+k.sizes;p.append("favicon",ks2);}
+b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+GITHUB
+javascript:(function(){var b=new URL("http://localhost:8532/md");var p=new URLSearchParams();p.append("mode","github");const gf=k=>Array.from(k).filter(k=>/icon|apple-touch-icon|shortcut icon/.test(k.rel)).map(k=>({rel:k.rel,href:k.href,sizes:k.sizes}));p.append("url",document.URL);p.append("title",document.title);var ks=gf(document.getElementsByTagName("link"));for(const k of ks){ks2=k.rel+"~"+k.href+"~"+k.sizes;p.append("favicon",ks2);}
+b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+JIRA
+javascript:(function(){var b=new URL("http://localhost:8532/md");var p=new URLSearchParams();p.append("mode","jira");const gf=k=>Array.from(k).filter(k=>/icon|apple-touch-icon|shortcut icon/.test(k.rel)).map(k=>({rel:k.rel,href:k.href,sizes:k.sizes}));p.append("url",document.URL);p.append("title",document.title);var ks=gf(document.getElementsByTagName("link"));for(const k of ks){ks2=k.rel+"~"+k.href+"~"+k.sizes;p.append("favicon",ks2);}
+b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+CLIP
+javascript:(function(){var b=new URL("http://localhost:8532/clip");var p=new URLSearchParams();p.append("url",document.URL);p.append("title",document.title);var c={url:document.URL,html:document.documentElement.outerHTML,};navigator.clipboard.writeText(JSON.stringify(c)).then(function(){},function(err){console.error('Could not copy text: ',err);p.append("error",err);});b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+HTML
+javascript:(function(){var b=new URL("http://localhost:8532/pdf");var p=new URLSearchParams();p.append("mode","html");p.append("url",document.URL);p.append("title",document.title);var c={url:document.URL,html:document.documentElement.outerHTML,};navigator.clipboard.writeText(JSON.stringify(c)).then(function(){},function(err){console.error('Could not copy text: ',err);p.append("error",err);});b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+MIRROR
+javascript:(function(){var b=new URL("http://localhost:8532/mirror");var p=new URLSearchParams();p.append("url",document.URL);p.append("title",document.title);var c={url:document.URL,html:document.documentElement.outerHTML,};navigator.clipboard.writeText(JSON.stringify(c)).then(function(){},function(err){console.error('Could not copy text: ',err);p.append("error",err);});b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+PDF
+javascript:(function(){var b=new URL("http://localhost:8532/pdf");var p=new URLSearchParams();p.append("url",document.URL);p.append("title",document.title);var c={url:document.URL,html:document.documentElement.outerHTML,};navigator.clipboard.writeText(JSON.stringify(c)).then(function(){},function(err){console.error('Could not copy text: ',err);p.append("error",err);});b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+
+TEXT
+javascript:(function(){var b=new URL("http://localhost:8532/pdf");var p=new URLSearchParams();p.append("mode","text");p.append("url",document.URL);p.append("title",document.title);var c={url:document.URL,html:document.documentElement.outerHTML,};navigator.clipboard.writeText(JSON.stringify(c)).then(function(){},function(err){console.error('Could not copy text: ',err);p.append("error",err);});b.search=p.toString();console.log(b.toString());w=window.open(b.toString(),"","");})();
+"""
