@@ -433,13 +433,27 @@ def make_obsidian_markdown():
 
     # Lookup netloc and title_suffix to get alias for title.
     final_title = f"{parsed_url.netloc}: {title}"
+    print(f"title='{title}' final_title='{final_title}'")
+
     suffix_map = ALIAS_MAP.get(parsed_url.netloc,{})
+    prefix = ""
     for suffix in suffix_map.keys():
         if suffix == "":
-            final_title = f"{suffix_map[suffix]}: {title}"
+            prefix = suffix_map[suffix]
         elif title.endswith(suffix):
-            title = title[:-len(suffix)]
-            final_title = f"{suffix_map[suffix]}: {title}"
+            title = title[:-len(suffix)].strip()
+            prefix = suffix_map[suffix]
+
+        if prefix != "":
+            print(f"prefix='{prefix}' suffix='{suffix}'")
+
+            if title == prefix:
+                final_title = title
+            else:
+                final_title = f"{prefix}: {title}"
+
+            print(f"title='{title}' final_title='{final_title}'")
+            break
 
     # If favicon path is an image, remove the search parameters.
     favicon_href = None
@@ -467,11 +481,18 @@ def make_obsidian_markdown():
     elif mode == "lines":
         # Use separate lines for each element of obsidian link.
         out = []
+
         if favicon_href:
-            out.append(f"![favicon|{FAVICON_WIDTH}]({favicon_href})")
+            out.append(favicon_href)
 
         # Replace square brackets with parentheses.
-        out.extend((final_title, final_url))
+        if title != final_title:
+            out.append(title)
+
+        out.extend((
+            final_title, 
+            final_url,
+        ))
 
         final_markdown = "\n".join(out)
     else:
@@ -633,3 +654,22 @@ def make_pdf():
 
 if __name__ == "__main__":
     app.run(debug=True,host="0.0.0.0", port=8532)
+
+"""
+# Create a BeautifulSoup object
+soup = BeautifulSoup(html_content, 'html.parser')
+
+# Extract all text from the HTML including script tags
+texts = [text for text in soup.find_all(text=True)]
+
+# Extract all text from script tags
+script_texts = [script.string for script in soup.find_all('script') if script.string]
+
+# Concatenate and filter out None and empty strings
+all_texts = texts + script_texts
+filtered_all_texts = [text.strip() for text in all_texts if text.strip()]
+
+# Output the texts
+filtered_all_texts
+
+"""
