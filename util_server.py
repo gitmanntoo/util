@@ -3,23 +3,34 @@ import os
 import json
 from pathlib import Path
 from collections import namedtuple
+from dataclasses import dataclass, asdict, field
 import re
 from urllib.parse import urlparse, urljoin, urlsplit, urlunsplit, urlunparse
 
 import fitz
 from flask import Flask, abort, make_response, render_template, request, send_file, send_from_directory
+from jinja2 import Environment, FileSystemLoader
 import jsmin
 from playwright.sync_api import sync_playwright
 import pyperclip
+import requests
 import yaml
 
 from bs4 import BeautifulSoup
+
+from library import url_util 
+from library import html_util
 
 
 app = Flask(__name__)
 
 STATIC_DIR = Path("static")
 SIZE_REGEX = re.compile(r'\b(\d+)x(\d+)\b')
+
+# Initialize template environment.
+template_loader = FileSystemLoader('templates')
+template_env = Environment(loader=template_loader)
+
 
 @app.route('/')
 def read_root():
@@ -62,7 +73,7 @@ def get_bookmarklets():
 
     print("debugxxxxx 01")
     out = []
-    for name in ("md","lines","github","jira","clip","html","pdf","text"):
+    for name in ("markdown","github","jira","links","clip","html","pdf","text"):
         out.append(name.upper())
         out.append(get_javascript_file(name, "bookmarklet"))
         out.append("")
@@ -169,54 +180,6 @@ def iterate_elements(element, depth=0):
     return out
 
 
-def largest_favicon_link(favicon_links):
-    """Get the largest favicon link from a list of links. 
-    Each item in the favicon_links must be a dictionary with keys "rel", "href", and "sizes".
-    """
-
-    favicon_link = None
-    favicon_width = None
-    favicon_height = None
-
-    for link in favicon_links:
-        link_rel = link.get('rel')
-        link_href = link.get('href')
-        link_sizes = link.get('sizes')
-
-        #  Skip if link is missing 'rel' or 'href'.
-        if not link_href or not link_rel:
-            continue
-
-        if not link_rel in ("shortcut icon","icon","apple-touch-icon"):
-            continue
-
-        # Get size from 'sizes' attribute.
-        if link_sizes:
-            m = SIZE_REGEX.search(link_sizes)
-            if m:
-                width,height = [int(x) for x in m.groups()]
-                if favicon_link is None or (width > favicon_width or height > favicon_height):
-                    favicon_link = link_href
-                    favicon_width = width
-                    favicon_height = height
-                    continue
-
-        # Get size from 'href' attribute.
-        m = SIZE_REGEX.search(link_href)
-        if m:
-            width,height = [int(x) for x in m.groups()]
-            if favicon_link is None or (width > favicon_width or height > favicon_height):
-                favicon_link = link_href
-                favicon_width = width
-                favicon_height = height
-                continue
-
-        # If icon has no size, assume it is the largest.
-        return link_href
-
-    return favicon_link
-
-
 @app.route('/clip')
 def get_clipboard():
     """Return the contents of the clipboard."""
@@ -246,284 +209,10 @@ def get_clipboard():
     return resp
 
 
-@app.route('/proxy/mirror', methods=["POST"])
-def mirror_post():
-    """Save request details."""
-
-    global mirror_url
-    global mirror_request
-
-    mirror_url = request.args.get("url")
-    mirror_request = request_to_dict(request)
-
-    response = make_response("OK")
-    response.headers['Content-Type'] = 'text/plain'
-
-    return response
-
-# javascript: b=new URL("http://localhost:8532/mirror");p=new URLSearchParams();p.append("url",document.URL);b.search=p.toString();d={"html":document.documentElement.outerHTML};fetch(b.toString(),{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify(d)}).catch(e=>{console.error(e)});w=window.open(b.toString(),"","");
-
-@app.route('/mirror', methods=["GET"])
-def mirror_get():
-    """Mirror request details back to response as plain text."""
-
-    # Read request parameters.
-    url = request.args.get("url")
-
-    # Read clipboard contents.
-    clip = pyperclip.paste()
-
-    # If contents are not valid JSON, return error.
-    try:
-        clip_json = json.loads(clip)
-        if url != clip_json["url"]:
-            raise Exception("URL in clipboard does not match request URL.")
-        soup = BeautifulSoup(clip_json["html"], 'html.parser')
-    except Exception as e:
-        return str(e), 400
-    
-    page_title = soup.title.text
-
-    # Build output lines.
-    out = [
-        f"URL: {url}",
-        f"TITLE: {page_title}",
-        "",
-    ]
-
-    # Get favicon
-    if soup is not None:
-        rel_links = soup.find_all("link")
-        all_links = []
-        for link in rel_links:
-            new_link = {
-                "rel": link.attrs.get('rel'),
-                "href": link.attrs.get('href'),
-                "sizes": link.attrs.get('sizes'),
-            }
-            all_links.append(new_link)
-
-        favicon_link = largest_favicon_link(all_links)
-
-        if favicon_link:
-            # Handle relative URLs
-            if favicon_link.startswith('/'):
-                favicon_link = urljoin(url, favicon_link)
-
-            out.append(f"FAVICON: {favicon_link}")
-        else:
-            out.append(f"FAVICON: NONE")
-        out.append("")
-
-        # for rel_type 
-        #     favicon_link = soup.find("link", rel=rel_type)
-        #     if favicon_link and 'href' in favicon_link.attrs:
-        #         out.append(f"FAVICON: {favicon_link}")
-
-        # # If a favicon link is found, print its href attribute
-        # favicon_href = "NOT FOUND"
-        # if favicon_link and 'href' in favicon_link.attrs:
-        #     favicon_href = favicon_link['href']
-        
-    out.append("HEADERS")
-    for k,v in request.headers.items():
-        out.append(f"{k}: {v}")
-    out.append("")
-
-    out.append(f"QUERY: {request.query_string}")
-    for k,v in request.args.to_dict(flat=True).items():
-        out.append(f"{k}: {v}")
-    out.append("")
-
-    if soup is not None:
-        out.append("TEXT:")
-        text_tuples = iterate_elements(soup)
-        out.extend(["".join(x) for x in text_tuples])
-
-        out.append("")
-
-        out.append("HTML:")
-        out.append(soup.prettify())
-        out.append("")
-    else:
-        out.append("NO HTML")
-
-    outStr = "\n".join(out)
-    pyperclip.copy(outStr)
-
-    resp = make_response(outStr)
-    resp.headers['Content-Type'] = 'text/plain'
-
-    return resp
-
-
-"""
-javascript:p=trustedTypes.createPolicy('myPolicy',{createHTML: (input) => input}); u=new URL(document.URL); u.search=""; t=u.hostname+": "+document.title;  h=p.createHTML("<pre>["+t+"]("+u.toString()+")<pre>"); w=window.open("","",""); w.document.title="MD "+t; w.document.body.innerHTML=h;
-
-javascript:b=new URL("http://localhost:8532/markdown");gf=function(){for(var t=document.getElementsByTagName("link"),e=0;e<t.length;e++)if("icon"==t[e].getAttribute("rel")||"shortcut icon"==t[e].getAttribute("rel"))return t[e].getAttribute("href")};p=new URLSearchParams();p.append("url",document.URL);p.append("title",document.title);p.append("favicon",gf());b.search=p.toString();w=window.open(b.toString(),"","");
-"""
-
-URLTuple = namedtuple("URLTuple", [
-    "scheme",
-    "netloc",
-    "path",
-    "params",
-    "query",
-    "fragment",
-])
-
 CONFIG = yaml.safe_load(open("util_server.yml"))
 ALIAS_MAP = CONFIG.get("alias_map", {})
 IMAGE_TYPES = CONFIG.get("image_types", [])
 FAVICON_WIDTH = 20
-
-@app.route('/md')
-def make_obsidian_markdown():
-    """Make a markdown link for an obsidian page.
-
-    Parameters:
-    - mode: str -- Mode for markdown format
-        - default: "obsidian" consisting of ![favicon|20] [extended title](url)
-        - "simple": simple markdown consisting of [title](url) without any modifications
-        - "jira": JIRA format using pipe: [title|url]
-    - url: str -- URL of source page
-    - title: str -- Title of source page
-    - favicon: str -- Repeated favicon links from source page. Consists of `~` delimited strings:
-        - Example: <link.ref>~<link.href>~<link.sizes>
-    """
-
-    # Read query parameters.
-    url = request.args.get("url","")
-    title = request.args.get("title","")
-    mode = request.args.get("mode","obsidian")
-
-    query = request.args.to_dict(flat=False)
-    favicon_links = []
-    for f in query.get("favicon",[]):
-        tokens = f.split("~")
-        new_link = {
-            "rel": tokens[0],
-            "href": tokens[1],
-            "sizes": tokens[2] if len(tokens) > 2 else "",
-        }
-        favicon_links.append(new_link)
-
-    # Get largest favicon link.
-    favicon_link = largest_favicon_link(favicon_links)
-
-    # Parse URL
-    parsed_url = urlparse(url)
-    final_url = urlunparse(URLTuple(
-        scheme=parsed_url.scheme,
-        netloc=parsed_url.netloc,
-        path=parsed_url.path,
-        params="",
-        query="",
-        fragment=parsed_url.fragment,
-    ))
-
-    # Get suffix from title.
-    title_tokens = [x.strip() for x in title.rsplit("|", 1)]
-    if len(title_tokens) == 2:
-        title_prefix = title_tokens[0]
-        title_suffix = title_tokens[1]
-    else:
-        title_prefix = title
-        title_suffix = ""
-
-    # Lookup netloc and title_suffix to get alias for title.
-    final_title = f"{parsed_url.netloc}: {title}"
-    print(f"title='{title}' final_title='{final_title}'")
-
-    suffix_map = ALIAS_MAP.get(parsed_url.netloc,{})
-    prefix = ""
-    for suffix in suffix_map.keys():
-        if suffix == "":
-            prefix = suffix_map[suffix]
-        elif title.endswith(suffix):
-            title = title[:-len(suffix)].strip()
-            prefix = suffix_map[suffix]
-
-        if prefix != "":
-            print(f"prefix='{prefix}' suffix='{suffix}'")
-
-            if title == prefix:
-                final_title = title
-            else:
-                final_title = f"{prefix}: {title}"
-
-            print(f"title='{title}' final_title='{final_title}'")
-            break
-
-    # If favicon path is an image, remove the search parameters.
-    favicon_href = None
-    if favicon_link:
-        favicon_url = urlparse(favicon_link)
-        if favicon_url.netloc == "" or favicon_url.netloc == parsed_url.netloc:
-            favicon_url = urlparse(urljoin(parsed_url.geturl(), favicon_url.geturl()))
-                                   
-        tokens = favicon_url.path.rsplit(".", 1)
-        if len(tokens) == 2 and tokens[1] in IMAGE_TYPES:
-            favicon_url = urlparse(urljoin(favicon_url.geturl(), favicon_url.path))
-
-        favicon_href = favicon_url.geturl()
-
-    # Build markdown link.
-    final_markdown = ""
-    if mode == "github":
-        # Replace square brackets with parentheses.
-        title = title.replace('[','(').replace(']',')')
-        final_markdown = f"[{title}]({final_url})"
-    elif mode == "jira":
-        # Replace pipe with square brackets.
-        title = title.replace('|','-')
-        final_markdown = f"[{title}|{final_url}]"
-    elif mode == "lines":
-        # Use separate lines for each element of obsidian link.
-        out = []
-
-        if favicon_href:
-            out.append(favicon_href)
-
-        # Replace square brackets with parentheses.
-        if title != final_title:
-            out.append(title)
-
-        out.extend((
-            final_title, 
-            final_url,
-        ))
-
-        final_markdown = "\n".join(out)
-    else:
-        # obsidian default for everything else
-        if favicon_href:
-            final_markdown += f"![favicon|{FAVICON_WIDTH}]({favicon_href}) "
-
-        # Replace square brackets with parentheses.
-        final_title = final_title.replace('[','(').replace(']',')')
-
-        final_markdown += f"[{final_title}]({final_url})"
-
-    ### DEBUGXXXXX: Print all variables
-    # final_markdown = [
-    #     f"{final_title=}",
-    #     f"{final_url=}",
-    #     f"{favicon_link=}",
-    #     f"{favicon_href=}",
-    #     f"{final_markdown=}",
-    #     "",
-    #     f"{favicon_links=}",
-    # ]
-
-
-    # Build response
-    pyperclip.copy(final_markdown)
-    resp = make_response(final_markdown)
-    resp.headers['Content-Type'] = 'text/plain'
-
-    return resp
-
 
 PDF_TMP_DIR = Path("tmp/pdf")
 PDF_FILE = PDF_TMP_DIR / "output.pdf"
@@ -650,6 +339,135 @@ def make_pdf():
     else:
         return send_file(output_path, mimetype='application/pdf', as_attachment=True)    
 
+
+@dataclass
+class PageMetadata:
+    title: str
+    url: str
+    host_url: str = None
+    host: str = None
+    html: str = None
+    favicons: list[html_util.RelLink] = field(default_factory=list)
+    error: str = None
+
+def get_page_metadata() -> PageMetadata:
+    """Add metadata to PageMetadata object."""
+
+    # Get metadata from rueqest parameters.
+    meta = PageMetadata(
+        title=request.args.get("title",""),
+        url=request.args.get("url",""),
+    )
+
+    # Read clipboard contents.
+    clip = pyperclip.paste()
+
+    # If contents are not valid JSON, return plain text.
+    try:
+        clip_json = json.loads(clip)
+        meta.html = clip_json.get("html", "")
+    except json.JSONDecodeError as e:
+        meta.error = str(e)
+        return meta
+
+    # Get the host from the URL
+    parsed = urlparse(meta.url)
+    meta.host_url = f'{parsed.scheme}://{parsed.netloc}'
+    meta.host = parsed.netloc
+
+    # Prettify HTML
+    if meta.html:
+        soup = BeautifulSoup(meta.html, 'html.parser')
+        meta.html = soup.prettify()
+
+    # Extract favicon links from the HTML page in descending order by size.
+    meta.favicons =url_util.sort_favicon_links(html_util.get_favicon_links(meta.url, meta.html))
+
+    return meta
+
+
+@app.route('/links')
+def links():
+    """Render the links page.
+
+    Parameters:
+    - url: str -- URL of source page
+    - title: str -- Title of source page
+    """
+
+    meta = get_page_metadata()    
+
+    template = template_env.get_template('links.html')
+    rendered_html = template.render(asdict(meta))
+    resp = make_response(rendered_html)
+
+    return resp
+
+
+@app.route('/markdown')
+def markdown():
+    """Build a markdown link for page.
+
+    Parameters:
+    - url: str -- URL of source page
+    - title: str -- Title of source page
+    - format: str -- Format of link. Default: "obsidian"
+        - "obsidian": obsidian link consisting of ![favicon|20] [host title](url)
+        - "github": github markdown consisting of [title](url) without any modifications
+        - "jira": JIRA format using pipe: [title|url]
+    """
+    format = request.args.get("format","obsidian")
+
+    meta = get_page_metadata()
+
+    # Build HTML and text output tokens.
+    html_tokens = []
+    text_tokens = []
+
+    if format == "obsidian":
+        if meta.favicons:
+            html_tokens.append(f'<img src={meta.favicons[0].href} width={FAVICON_WIDTH} />')
+            text_tokens.append(f'![{meta.favicons[0].href}|{FAVICON_WIDTH}]')
+
+        # Make title without square brackets.
+        title = f'{meta.host} {meta.title}'
+        title = title.replace('[','(').replace(']',')')
+
+        html_tokens.append(f'<a href="{meta.url}">{title}</a>')
+        text_tokens.append(f'[{title}]({meta.url})') 
+    elif format == "github":
+        # Make title without square brackets.
+        title = f'{meta.title}'
+        title = title.replace('[','(').replace(']',')')
+
+        html_tokens.append(f'<a href="{meta.url}">{title}</a>')
+        text_tokens.append(f'[{title}]({meta.url})') 
+    elif format == "jira":
+        # Make title without pipes.
+        title = f'{meta.title}'
+        title = title.replace('|','-')
+
+        html_tokens.append(f'<a href="{meta.url}">{title}</a>')
+        text_tokens.append(f'[{title}|{meta.url}]') 
+    else:
+        html_tokens.append(f'Format "{format}" is not supported.')
+        text_tokens.append(f'Format "{format}" is not supported.')
+
+    # Build HTML and text output strings.
+    html_markdown = "".join(html_tokens)
+    text_markdown = "".join(text_tokens)
+
+    # Copy the text_markdown to the clipboard.
+    pyperclip.copy(text_markdown)
+
+    template = template_env.get_template('markdown.html')
+    rendered_html = template.render({
+        "html_markdown": html_markdown,
+        "text_markdown": text_markdown,
+    })
+    resp = make_response(rendered_html)
+
+    return resp
 
 
 if __name__ == "__main__":

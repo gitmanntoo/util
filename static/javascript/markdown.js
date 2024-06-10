@@ -2,7 +2,6 @@
 var b = new URL("http://localhost:8532/markdown");
 
 var p = new URLSearchParams();
-p.append("format","jira");
 p.append("url",document.URL);
 p.append("title",document.title);
 
