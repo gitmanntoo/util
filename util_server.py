@@ -11,6 +11,7 @@ from flask import Flask, abort, make_response, render_template, request, send_fi
 import jsmin
 from playwright.sync_api import sync_playwright
 import pyperclip
+import requests
 import yaml
 
 from bs4 import BeautifulSoup
@@ -24,6 +25,14 @@ SIZE_REGEX = re.compile(r'\b(\d+)x(\d+)\b')
 @app.route('/')
 def read_root():
     return "Hello, World!"
+
+
+def check_url_exists(url):
+    try:
+        response = requests.head(url)
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
 
 
 def get_javascript_file(filename, mode):
