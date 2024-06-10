@@ -1,8 +1,7 @@
 // This script copies details about the page into the clipboard.
-var b = new URL("http://localhost:8532/markdown");
+var b = new URL("http://localhost:8532/links");
 
 var p = new URLSearchParams();
-p.append("format","jira");
 p.append("url",document.URL);
 p.append("title",document.title);
 

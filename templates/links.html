@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Links Page</title>
+    <style>
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <h1>Title and URL</h1>
+    <strong>Title: </strong><a href="{{ url }}">{{ title }}</a>
+    <br />
+    <strong>Host: </strong><a href="{{ host_url }}">{{ host }}</a>
+    <br />
+    <strong>URL: </strong><a href="{{ url }}">{{ url }}</a>
+    <br />
+    <h1>Favicon Links</h1>
+    {% for link in favicons %}
+    <img src="{{ link.href }}" width="20" /> {{ link.rel}} <a href="{{ link.href }}">{{ link.href|e }}</a> {{ link.width }}x{{ link.height }}<br />
+    {% endfor %}
+    <h1>HTML</h1>
+    <pre>{{ html|e }}</pre>
+</body>
+</html>
+
