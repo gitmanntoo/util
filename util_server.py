@@ -427,7 +427,7 @@ def markdown():
     if format == "obsidian":
         if meta.favicons:
             html_tokens.append(f'<img src={meta.favicons[0].href} width={FAVICON_WIDTH} />')
-            text_tokens.append(f'![{meta.favicons[0].href}|{FAVICON_WIDTH}]')
+            text_tokens.append(f'![favicon|{FAVICON_WIDTH}]({meta.favicons[0].href})')
 
         # Make title without square brackets.
         title = f'{meta.host} {meta.title}'
