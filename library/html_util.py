@@ -44,7 +44,11 @@ def get_favicon_links(page_url, html_string):
     links = []
     if head:
         for link in head.find_all('link'):
-            href = str(url_util.make_absolute_urls(page_url, link.get('href')))
+            href = link.get('href')
+            if not href:
+                continue
+
+            href = str(url_util.make_absolute_urls(page_url, href))
             sizes = link.get('sizes')
             rel = link.get('rel')
 
