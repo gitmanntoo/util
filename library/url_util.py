@@ -89,10 +89,17 @@ def get_image_size(url):
     return None
 
 
-def sort_favicon_links(favicon_links):
+def sort_favicon_links(favicon_links: list, max_favicon_links: int, favicon_width: int) -> list:
     """
     Sort favicon links by size descending. If any links are for common favicon files, they will appear first.
     """
+
+    if max_favicon_links <= 0:
+        # No links required. Just return the original list.
+        return favicon_links
+
+    # Count the links that are at least favicon_width wide.
+    found_links = 0    
 
     new_links = []
     for link in favicon_links:
@@ -109,6 +116,13 @@ def sort_favicon_links(favicon_links):
         link.width = s.width
         link.height = s.height
         new_links.append(link)
+
+        # Count the links that are at least favicon_width wide. Exit if we've found enough.
+        if link.width >= favicon_width:
+            found_links += 1
+            if found_links >= max_favicon_links:
+                break
+
 
     # Sort by size descending
     new_links.sort(key=lambda x: x.width * x.height, reverse=True)

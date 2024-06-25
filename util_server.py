@@ -350,7 +350,7 @@ class PageMetadata:
     favicons: list[html_util.RelLink] = field(default_factory=list)
     error: str = None
 
-def get_page_metadata() -> PageMetadata:
+def get_page_metadata(max_favicon_links: int=1, favicon_width: int=FAVICON_WIDTH) -> PageMetadata:
     """Add metadata to PageMetadata object."""
 
     # Get metadata from rueqest parameters.
@@ -381,7 +381,8 @@ def get_page_metadata() -> PageMetadata:
         meta.html = soup.prettify()
 
     # Extract favicon links from the HTML page in descending order by size.
-    meta.favicons =url_util.sort_favicon_links(html_util.get_favicon_links(meta.url, meta.html))
+    favicon_links = html_util.get_favicon_links(meta.url, meta.html)
+    meta.favicons =url_util.sort_favicon_links(favicon_links, max_favicon_links, favicon_width)
 
     return meta
 
@@ -418,7 +419,17 @@ def markdown():
     """
     format = request.args.get("format","obsidian")
 
-    meta = get_page_metadata()
+    # Adjust the number of favicons based on the format.
+    if format == "obsidian":
+        max_favicon_links = 1
+    elif format == "github":
+        max_favicon_links = 0
+    elif format == "jira":
+        max_favicon_links = 0
+    else:
+        max_favicon_links = 999
+
+    meta = get_page_metadata(max_favicon_links=max_favicon_links)
 
     # Build HTML and text output tokens.
     html_tokens = []
