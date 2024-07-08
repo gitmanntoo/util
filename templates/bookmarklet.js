@@ -1,1 +1,0 @@
-javascript: b=new URL("http://localhost:8532/mirror");p=new URLSearchParams();p.append("url",document.URL);p.append("title",document.title);p.append("html",document.documentElement.outerHTML);b.search=p.toString();w=window.open(b.toString(),"","");
